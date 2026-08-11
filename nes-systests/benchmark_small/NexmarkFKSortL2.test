@@ -1,0 +1,25 @@
+# name: benchmark_small/NexmarkFKSortL2.test
+# description: Nexmark Q8-variant under the oblivious FK-SORT-L2 join. MUST run with --optimizer join_strategy=FK_SORT_L2
+#              (see the systest_fksort_l2_* ctest targets). FK-SORT keeps nothing sorted and pays a full bitonic sort per
+#              tuple (Opaque-style baseline); per-tuple compaction leaks each tuple's degree; its output equals a standard inner join's — the same
+#              2160/6293051 as the untouched Nexmark.test Q8 expectation.
+# groups: [FKSortL2]
+
+# Source definitions
+CREATE LOGICAL SOURCE bid(timestamp UINT64, auctionId INT32, bidder INT32, datetime INT64, price FLOAT64);
+CREATE PHYSICAL SOURCE FOR bid TYPE File;
+ATTACH FILE small/nexmark/bid_modified_100K.csv
+CREATE LOGICAL SOURCE auction(timestamp UINT64, id INT32, initialbid INT32, reserve INT32, expires INT64, seller INT32, category INT32);
+CREATE PHYSICAL SOURCE FOR auction TYPE File;
+ATTACH FILE small/nexmark/auction_modified_100K.csv
+
+CREATE SINK q8VariantChecksum(start UINT64 NOT NULL, end UINT64 NOT NULL, bid_timestamp UINT64, auctionId INT32, bidder INT32, datetime INT64, price FLOAT64, auction_timestamp UINT64, id INT32, initialbid INT32, reserve INT32, expires INT64, seller INT32, category INT32)  TYPE Checksum;
+
+# Query 8 Variant (auction is the PK side / right input, bid the FK side)
+SELECT start, end, bid_timestamp, auctionId, bidder, datetime, price, auction_timestamp, id, initialbid, reserve, expires, seller, category
+    FROM (SELECT timestamp as bid_timestamp, auctionId, bidder, datetime, price FROM bid)
+INNER JOIN
+    (SELECT timestamp as auction_timestamp, id, initialbid, reserve, expires, seller, category FROM auction)
+ON auctionId = id WINDOW TUMBLING (bid_timestamp, auction_timestamp, size 10 sec) INTO q8VariantChecksum;
+----
+2160 6293051

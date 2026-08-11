@@ -61,6 +61,20 @@ resolveLoweringRule(const LogicalOperator& logicalOperator, const LoweringRuleRe
                 }
                 throw UnknownOptimizerRule("Lowering rule for logical operator '{}' can't be resolved", logicalOperator.getName());
             }
+            case JoinImplementation::FK_MERG_L2:
+            case JoinImplementation::FK_MERG_L3:
+            case JoinImplementation::FK_MERG_L4:
+            case JoinImplementation::FK_SORT_L2:
+            case JoinImplementation::FK_SORT_L3:
+            case JoinImplementation::FK_SORT_L4:
+            case JoinImplementation::NFK_JOIN_L2:
+            case JoinImplementation::NFK_JOIN_L3: {
+                if (auto ruleOptional = LoweringRuleRegistry::instance().create(std::string("FKMergJoin"), registryArgument))
+                {
+                    return std::move(ruleOptional.value());
+                }
+                throw UnknownOptimizerRule("Lowering rule for logical operator '{}' can't be resolved", logicalOperator.getName());
+            }
             case JoinImplementation::CHOICELESS: {
                 throw UnknownOptimizerRule("ImplementationTrait cannot be choiceless for join", logicalOperator.getName());
             }

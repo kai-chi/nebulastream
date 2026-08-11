@@ -29,6 +29,14 @@ enum class JoinImplementation : uint8_t
 {
     NESTED_LOOP_JOIN,
     HASH_JOIN,
+    FK_MERG_L2,
+    FK_MERG_L3,
+    FK_MERG_L4,
+    FK_SORT_L2,
+    FK_SORT_L3,
+    FK_SORT_L4,
+    NFK_JOIN_L2,
+    NFK_JOIN_L3,
     CHOICELESS
 };
 

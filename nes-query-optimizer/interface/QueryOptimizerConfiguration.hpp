@@ -29,6 +29,14 @@ enum class StreamJoinStrategy : uint8_t
 {
     NESTED_LOOP_JOIN,
     HASH_JOIN,
+    FK_MERG_L2,
+    FK_MERG_L3,
+    FK_MERG_L4,
+    FK_SORT_L2,
+    FK_SORT_L3,
+    FK_SORT_L4,
+    NFK_JOIN_L2,
+    NFK_JOIN_L3,
     OPTIMIZER_CHOOSES
 };
 
@@ -42,7 +50,14 @@ public:
         = {"join_strategy",
            StreamJoinStrategy::OPTIMIZER_CHOOSES,
            "Join Strategy"
-           "[NESTED_LOOP_JOIN|HASH_JOIN|OPTIMIZER_CHOOSES]."};
+           "[NESTED_LOOP_JOIN|HASH_JOIN|FK_MERG_L2|FK_MERG_L3|FK_MERG_L4|FK_SORT_L2|FK_SORT_L3|FK_SORT_L4|NFK_JOIN_L2|NFK_JOIN_L3|"
+           "OPTIMIZER_CHOOSES]. FK_MERG_*, FK_SORT_* and NFK_JOIN_* are the oblivious joins; all require an inner single-key "
+           "equi-join over a tumbling window. The FK families additionally require unique keys on the right (PK) input; NFK_JOIN "
+           "is the generic Krastnikov-based join allowing duplicates on both sides (no L4: its worst case is the Cartesian "
+           "product). MERG maintains key-sorted windows (OAppend + bitonic merge); SORT keeps nothing sorted and pays a full "
+           "bitonic sort per join (the Opaque-style baseline). L4 pads its output with dummy tuples; L3 leaks only the per-window "
+           "output cardinality; L2 processes tuple-at-a-time in event-time order (leaking each tuple's degree) and requires "
+           "event-time characteristics."};
 
     QueryOptimizerNetworkConfiguration network = {"network", "Network configuration overrides for query decomposition"};
 

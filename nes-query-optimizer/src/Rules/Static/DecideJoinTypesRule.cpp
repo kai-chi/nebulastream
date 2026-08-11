@@ -14,6 +14,7 @@
 #include <Rules/Static/DecideJoinTypesRule.hpp>
 
 #include <algorithm>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <string_view>
@@ -83,6 +84,53 @@ bool shallUseHashJoin(const LogicalFunction& joinFunction)
 
     return true;
 }
+
+/// FK_MERG_L4 (the oblivious foreign-key merge join) supports exactly one shape:
+/// an INNER equi-join whose join function is a single Equals over two field
+/// accesses. Anything else falls back to the NLJ.
+bool shallUseFKMergJoin(const JoinLogicalOperator& joinOperator)
+{
+    if (joinOperator.getJoinType() != JoinLogicalOperator::JoinType::INNER_JOIN)
+    {
+        return false;
+    }
+    const auto& joinFunction = joinOperator.getJoinFunction();
+    if (not joinFunction.tryGetAs<EqualsLogicalFunction>().has_value())
+    {
+        return false;
+    }
+    const auto children = joinFunction.getChildren();
+    return children.size() == 2
+        and std::ranges::all_of(
+               children, [](const LogicalFunction& child) { return child.tryGetAs<FieldAccessLogicalFunction>().has_value(); });
+}
+
+/// Maps an oblivious FK join strategy to its implementation trait, or nullopt
+/// for the non-FK strategies.
+std::optional<JoinImplementation> fkJoinImplementationFor(const StreamJoinStrategy strategy)
+{
+    switch (strategy)
+    {
+        case StreamJoinStrategy::FK_MERG_L2:
+            return JoinImplementation::FK_MERG_L2;
+        case StreamJoinStrategy::FK_MERG_L3:
+            return JoinImplementation::FK_MERG_L3;
+        case StreamJoinStrategy::FK_MERG_L4:
+            return JoinImplementation::FK_MERG_L4;
+        case StreamJoinStrategy::FK_SORT_L2:
+            return JoinImplementation::FK_SORT_L2;
+        case StreamJoinStrategy::FK_SORT_L3:
+            return JoinImplementation::FK_SORT_L3;
+        case StreamJoinStrategy::FK_SORT_L4:
+            return JoinImplementation::FK_SORT_L4;
+        case StreamJoinStrategy::NFK_JOIN_L2:
+            return JoinImplementation::NFK_JOIN_L2;
+        case StreamJoinStrategy::NFK_JOIN_L3:
+            return JoinImplementation::NFK_JOIN_L3;
+        default:
+            return std::nullopt;
+    }
+}
 }
 
 /// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
@@ -113,6 +161,25 @@ LogicalOperator DecideJoinTypesRule::apply(const LogicalOperator& logicalOperato
         if (this->joinStrategy == StreamJoinStrategy::NESTED_LOOP_JOIN)
         {
             tryInsert(traitSet, JoinImplementationTypeTrait{JoinImplementation::NESTED_LOOP_JOIN});
+        }
+        else if (const auto fkImplementation = fkJoinImplementationFor(this->joinStrategy))
+        {
+            /// Only on explicit request: the oblivious FK joins have a restricted
+            /// shape and the L4 variants change the output (worst-case dummy
+            /// padding), so OPTIMIZER_CHOOSES must never pick them.
+            if (shallUseFKMergJoin(*joinOperator.value()))
+            {
+                tryInsert(traitSet, JoinImplementationTypeTrait{*fkImplementation});
+            }
+            else
+            {
+                tryInsert(traitSet, JoinImplementationTypeTrait{JoinImplementation::NESTED_LOOP_JOIN});
+                NES_WARNING(
+                    "Operator {} is not an inner single-key equi-join, falling back to the NLJ. NOTE: for the L4 variants the NLJ "
+                    "does not emit the dummy padding, so the query's output differs; for L2/L3 the output matches, only the "
+                    "oblivious execution model is lost.",
+                    logicalOperator);
+            }
         }
         else if (shallUseHashJoin(joinOperator.value()->getJoinFunction()))
         {

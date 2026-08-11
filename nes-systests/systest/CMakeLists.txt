@@ -70,8 +70,11 @@ endif ()
 # Group exclude lists for systest invocations. The Inference group requires the IREE toolchain;
 # when ENABLE_IREE_TESTS is OFF (e.g. iree-import-onnx / iree-compile not in PATH) we exclude it
 # so the .test files in nes-systests/inference/ are skipped at runtime.
-set(SYSTEST_EXCLUDE_GROUPS large)
-set(SYSTEST_EXCLUDE_GROUPS_COMPILER large CompilationIntensive)
+# The FKMergL* / FKSortL* / NfkJoinL* groups hold tests that only pass under the respective oblivious join strategy
+# (--optimizer join_strategy=FK_MERG_*/FK_SORT_*/NFK_JOIN_*); they run via the dedicated systest targets below.
+set(SYSTEST_EXCLUDE_GROUPS large FKMergL2 FKMergL3 FKMergL4 FKSortL2 FKSortL3 FKSortL4 NfkJoinL2 NfkJoinL3)
+set(SYSTEST_EXCLUDE_GROUPS_COMPILER
+        large CompilationIntensive FKMergL2 FKMergL3 FKMergL4 FKSortL2 FKSortL3 FKSortL4 NfkJoinL2 NfkJoinL3)
 if (NOT ENABLE_IREE_TESTS)
     list(APPEND SYSTEST_EXCLUDE_GROUPS Inference)
     list(APPEND SYSTEST_EXCLUDE_GROUPS_COMPILER Inference)
@@ -131,6 +134,48 @@ if (NOT CODE_COVERAGE)
             NAME systest_benchmark_small
             COMMAND systest -b --show-query-performance --workingDir=${CMAKE_CURRENT_BINARY_DIR}/benchmark_small --exclude-groups ${SYSTEST_EXCLUDE_GROUPS_COMPILER} --data ${EXPANDED_TEST_DATA_PATH} -- --worker.query_engine.number_of_worker_threads=4 --worker.default_query_execution.execution_mode=COMPILER --worker.total_memory_in_bytes=${SYSTEST_JOIN_TOTAL_MEMORY_BYTES} --worker.unpooled_memory_fraction=${SYSTEST_JOIN_UNPOOLED_FRACTION} --worker.default_query_execution.slice_cache.enable_slice_cache=true)
     set_tests_properties(systest_benchmark_small PROPERTIES LABELS "Systest" PROCESSORS 4)
+
+    # Oblivious FK join tests (FK-MERG and FK-SORT families, levels L2-L4). Their expected results depend on the
+    # strategy (L4 emits dummy padding, L2/L3 compact it away), so the strategy is pinned via --optimizer and the
+    # groups are excluded from all other invocations. Single worker thread: the oblivious primitives are
+    # single-threaded by design (matching the reference evaluation), other thread counts are correct but serialize on
+    # the slice lock.
+    foreach (fkFamily IN ITEMS merg sort)
+        string(SUBSTRING ${fkFamily} 0 1 fkFamilyFirst)
+        string(TOUPPER ${fkFamilyFirst} fkFamilyFirst)
+        string(SUBSTRING ${fkFamily} 1 -1 fkFamilyRest)
+        set(fkFamilyCamel "${fkFamilyFirst}${fkFamilyRest}")
+        string(TOUPPER ${fkFamily} fkFamilyUpper)
+        foreach (fkLevel IN ITEMS l2 l3 l4)
+            string(TOUPPER ${fkLevel} fkLevelUpper)
+            foreach (executionMode IN ITEMS INTERPRETER COMPILER)
+                string(TOLOWER ${executionMode} executionModeLower)
+                ExternalData_Add_Test(test-data
+                        NAME systest_fk${fkFamily}_${fkLevel}_${executionModeLower}
+                        COMMAND systest -n 1 --show-query-performance --groups FK${fkFamilyCamel}${fkLevelUpper} --workingDir=${CMAKE_CURRENT_BINARY_DIR}/fk${fkFamily}_${fkLevel}_${executionModeLower} --data ${EXPANDED_TEST_DATA_PATH} --optimizer join_strategy=FK_${fkFamilyUpper}_${fkLevelUpper} -- --worker.query_engine.number_of_worker_threads=1 --worker.default_query_execution.execution_mode=${executionMode} --worker.total_memory_in_bytes=${SYSTEST_JOIN_TOTAL_MEMORY_BYTES} --worker.unpooled_memory_fraction=${SYSTEST_JOIN_UNPOOLED_FRACTION})
+                set_tests_properties(systest_fk${fkFamily}_${fkLevel}_${executionModeLower} PROPERTIES LABELS "Systest" PROCESSORS 1)
+            endforeach ()
+            ExternalData_Add_Test(test-data
+                    NAME systest_fk${fkFamily}_${fkLevel}_benchmark
+                    COMMAND systest -b --show-query-performance --groups FK${fkFamilyCamel}${fkLevelUpper} --workingDir=${CMAKE_CURRENT_BINARY_DIR}/fk${fkFamily}_${fkLevel}_benchmark --data ${EXPANDED_TEST_DATA_PATH} --optimizer join_strategy=FK_${fkFamilyUpper}_${fkLevelUpper} -- --worker.query_engine.number_of_worker_threads=1 --worker.default_query_execution.execution_mode=COMPILER --worker.total_memory_in_bytes=${SYSTEST_JOIN_TOTAL_MEMORY_BYTES} --worker.unpooled_memory_fraction=${SYSTEST_JOIN_UNPOOLED_FRACTION})
+            set_tests_properties(systest_fk${fkFamily}_${fkLevel}_benchmark PROPERTIES LABELS "Systest" PROCESSORS 1)
+        endforeach ()
+    endforeach ()
+    # NFK-JOIN (generic Krastnikov-based oblivious join): levels L2/L3 only, no L4 (its worst case is the Cartesian product).
+    foreach (fkLevel IN ITEMS l2 l3)
+        string(TOUPPER ${fkLevel} fkLevelUpper)
+        foreach (executionMode IN ITEMS INTERPRETER COMPILER)
+            string(TOLOWER ${executionMode} executionModeLower)
+            ExternalData_Add_Test(test-data
+                    NAME systest_nfkjoin_${fkLevel}_${executionModeLower}
+                    COMMAND systest -n 1 --show-query-performance --groups NfkJoin${fkLevelUpper} --workingDir=${CMAKE_CURRENT_BINARY_DIR}/nfkjoin_${fkLevel}_${executionModeLower} --data ${EXPANDED_TEST_DATA_PATH} --optimizer join_strategy=NFK_JOIN_${fkLevelUpper} -- --worker.query_engine.number_of_worker_threads=1 --worker.default_query_execution.execution_mode=${executionMode} --worker.total_memory_in_bytes=${SYSTEST_JOIN_TOTAL_MEMORY_BYTES} --worker.unpooled_memory_fraction=${SYSTEST_JOIN_UNPOOLED_FRACTION})
+            set_tests_properties(systest_nfkjoin_${fkLevel}_${executionModeLower} PROPERTIES LABELS "Systest" PROCESSORS 1)
+        endforeach ()
+        ExternalData_Add_Test(test-data
+                NAME systest_nfkjoin_${fkLevel}_benchmark
+                COMMAND systest -b --show-query-performance --groups NfkJoin${fkLevelUpper} --workingDir=${CMAKE_CURRENT_BINARY_DIR}/nfkjoin_${fkLevel}_benchmark --data ${EXPANDED_TEST_DATA_PATH} --optimizer join_strategy=NFK_JOIN_${fkLevelUpper} -- --worker.query_engine.number_of_worker_threads=1 --worker.default_query_execution.execution_mode=COMPILER --worker.total_memory_in_bytes=${SYSTEST_JOIN_TOTAL_MEMORY_BYTES} --worker.unpooled_memory_fraction=${SYSTEST_JOIN_UNPOOLED_FRACTION})
+        set_tests_properties(systest_nfkjoin_${fkLevel}_benchmark PROPERTIES LABELS "Systest" PROCESSORS 1)
+    endforeach ()
 endif (NOT CODE_COVERAGE)
 
 

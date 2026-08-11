@@ -632,6 +632,155 @@ TEST_F(DecideJoinTypesTest, OuterJoinWithNonEquiPredicateIsRejected)
     EXPECT_TRUE(trait->implementationType == JoinImplementation::NESTED_LOOP_JOIN);
 }
 
+/// Inner single-key equi-join with the FK_MERG_L4 strategy. Verify FK_MERG_L4 trait.
+TEST_F(DecideJoinTypesTest, ForcedFKMergL4StrategyProducesFKMergL4Trait)
+{
+    SourceCatalog sourceCatalog;
+    SinkCatalog sinkCatalog;
+
+    auto leftSchema = createSchema("left");
+    auto rightSchema = createSchema("right");
+
+    auto leftLogicalSource = createLogicalSource(sourceCatalog, Identifier::parse("LEFT_TEST"), leftSchema);
+    auto leftSourceDescriptor = createSourceDescriptor(sourceCatalog, leftLogicalSource);
+
+    auto rightLogicalSource = createLogicalSource(sourceCatalog, Identifier::parse("RIGHT_TEST"), rightSchema);
+    auto rightSourceDescriptor = createSourceDescriptor(sourceCatalog, rightLogicalSource);
+
+    const auto leftSourceOp = SourceDescriptorLogicalOperator::create(leftSourceDescriptor);
+    const auto rightSourceOp = SourceDescriptorLogicalOperator::create(rightSourceDescriptor);
+
+    auto joinFunction = EqualsLogicalFunction{
+        FieldAccessLogicalFunction{leftSourceOp->getOutputSchema().getFieldByName(Identifier::parse("left_id")).value()},
+        FieldAccessLogicalFunction{rightSourceOp->getOutputSchema().getFieldByName(Identifier::parse("right_id")).value()}};
+
+    auto characteristics = JoinLogicalOperator::createJoinTimeCharacteristic(
+        {Windowing::BoundTimeCharacteristic{Windowing::IngestionTimeCharacteristic{}},
+         Windowing::BoundTimeCharacteristic{Windowing::IngestionTimeCharacteristic{}}});
+
+    auto joinOp = JoinLogicalOperator::create(
+        std::array<LogicalOperator, 2>{leftSourceOp, rightSourceOp},
+        joinFunction,
+        createTumblingWindow(),
+        JoinLogicalOperator::JoinType::INNER_JOIN,
+        characteristics.value());
+
+    const Schema<UnqualifiedUnboundField, Ordered> sinkSchema{
+        {Identifier::parse("left_id"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("left_value"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("left_ts"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("right_id"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("right_value"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("right_ts"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("START"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("END"), DataTypeProvider::provideDataType(DataType::Type::UINT64)}};
+
+    auto sinkDescriptor = createSinkDescriptor(sinkCatalog, Identifier::parse("test_sink"), sinkSchema);
+    auto sinkOp = SinkLogicalOperator::create(joinOp, sinkDescriptor);
+    const LogicalPlan plan{QueryId::create(LocalQueryId{generateUUID()}, getNextDistributedQueryId()), {sinkOp->withInferredSchema()}};
+
+    DecideJoinTypesRule rule(StreamJoinStrategy::FK_MERG_L4);
+    auto result = rule.apply(plan);
+
+    auto joins = getOperatorByType<JoinLogicalOperator>(result);
+    ASSERT_EQ(joins.size(), 1);
+    auto trait = joins[0]->getTraitSet().get<JoinImplementationTypeTrait>();
+    EXPECT_TRUE(trait->implementationType == JoinImplementation::FK_MERG_L4);
+
+    /// The FK_MERG_L3/L2 strategies use the same eligibility and map to their own traits.
+    DecideJoinTypesRule l3Rule(StreamJoinStrategy::FK_MERG_L3);
+    auto l3Result = l3Rule.apply(plan);
+
+    auto l3Joins = getOperatorByType<JoinLogicalOperator>(l3Result);
+    ASSERT_EQ(l3Joins.size(), 1);
+    auto l3Trait = l3Joins[0]->getTraitSet().get<JoinImplementationTypeTrait>();
+    EXPECT_TRUE(l3Trait->implementationType == JoinImplementation::FK_MERG_L3);
+
+    DecideJoinTypesRule l2Rule(StreamJoinStrategy::FK_MERG_L2);
+    auto l2Result = l2Rule.apply(plan);
+
+    auto l2Joins = getOperatorByType<JoinLogicalOperator>(l2Result);
+    ASSERT_EQ(l2Joins.size(), 1);
+    auto l2Trait = l2Joins[0]->getTraitSet().get<JoinImplementationTypeTrait>();
+    EXPECT_TRUE(l2Trait->implementationType == JoinImplementation::FK_MERG_L2);
+
+    /// The FK-SORT and NFK-JOIN strategies share the eligibility check and map to their own traits.
+    for (const auto& [strategy, implementation] :
+         {std::pair{StreamJoinStrategy::FK_SORT_L2, JoinImplementation::FK_SORT_L2},
+          std::pair{StreamJoinStrategy::FK_SORT_L3, JoinImplementation::FK_SORT_L3},
+          std::pair{StreamJoinStrategy::FK_SORT_L4, JoinImplementation::FK_SORT_L4},
+          std::pair{StreamJoinStrategy::NFK_JOIN_L2, JoinImplementation::NFK_JOIN_L2},
+          std::pair{StreamJoinStrategy::NFK_JOIN_L3, JoinImplementation::NFK_JOIN_L3}})
+    {
+        DecideJoinTypesRule sortRule(strategy);
+        auto sortResult = sortRule.apply(plan);
+        auto sortJoins = getOperatorByType<JoinLogicalOperator>(sortResult);
+        ASSERT_EQ(sortJoins.size(), 1);
+        auto sortTrait = sortJoins[0]->getTraitSet().get<JoinImplementationTypeTrait>();
+        EXPECT_TRUE(sortTrait->implementationType == implementation);
+    }
+}
+
+/// FK_MERG_L4 strategy with a non-field-access leaf in the condition. Verify fallback to NLJ.
+TEST_F(DecideJoinTypesTest, ForcedFKMergL4WithUnsupportedConditionFallsBackToNLJ)
+{
+    SourceCatalog sourceCatalog;
+    SinkCatalog sinkCatalog;
+
+    auto leftSchema = createSchema("left");
+    auto rightSchema = createSchema("right");
+
+    auto leftLogicalSource = createLogicalSource(sourceCatalog, Identifier::parse("LEFT_TEST"), leftSchema);
+    auto leftSourceDescriptor = createSourceDescriptor(sourceCatalog, leftLogicalSource);
+
+    auto rightLogicalSource = createLogicalSource(sourceCatalog, Identifier::parse("RIGHT_TEST"), rightSchema);
+    auto rightSourceDescriptor = createSourceDescriptor(sourceCatalog, rightLogicalSource);
+
+    const auto leftSourceOp = SourceDescriptorLogicalOperator::create(leftSourceDescriptor);
+    const auto rightSourceOp = SourceDescriptorLogicalOperator::create(rightSourceDescriptor);
+
+    /// Equals(Add(field, field), FieldAccess) is not a single-key equi-join
+    auto addFunc = AddLogicalFunction{
+        FieldAccessLogicalFunction{leftSourceOp->getOutputSchema().getFieldByName(Identifier::parse("left_id")).value()},
+        FieldAccessLogicalFunction{leftSourceOp->getOutputSchema().getFieldByName(Identifier::parse("left_value")).value()}};
+
+    auto joinFunction = EqualsLogicalFunction{
+        addFunc, FieldAccessLogicalFunction{rightSourceOp->getOutputSchema().getFieldByName(Identifier::parse("right_id")).value()}};
+
+    auto characteristics = JoinLogicalOperator::createJoinTimeCharacteristic(
+        {Windowing::BoundTimeCharacteristic{Windowing::IngestionTimeCharacteristic{}},
+         Windowing::BoundTimeCharacteristic{Windowing::IngestionTimeCharacteristic{}}});
+
+    auto joinOp = JoinLogicalOperator::create(
+        std::array<LogicalOperator, 2>{leftSourceOp, rightSourceOp},
+        joinFunction,
+        createTumblingWindow(),
+        JoinLogicalOperator::JoinType::INNER_JOIN,
+        characteristics.value());
+
+    const Schema<UnqualifiedUnboundField, Ordered> sinkSchema{
+        {Identifier::parse("left_id"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("left_value"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("left_ts"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("right_id"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("right_value"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("right_ts"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("START"), DataTypeProvider::provideDataType(DataType::Type::UINT64)},
+        {Identifier::parse("END"), DataTypeProvider::provideDataType(DataType::Type::UINT64)}};
+
+    auto sinkDescriptor = createSinkDescriptor(sinkCatalog, Identifier::parse("test_sink"), sinkSchema);
+    auto sinkOp = SinkLogicalOperator::create(joinOp, sinkDescriptor);
+    const LogicalPlan plan{QueryId::create(LocalQueryId{generateUUID()}, getNextDistributedQueryId()), {sinkOp->withInferredSchema()}};
+
+    DecideJoinTypesRule rule(StreamJoinStrategy::FK_MERG_L4);
+    auto result = rule.apply(plan);
+
+    auto joins = getOperatorByType<JoinLogicalOperator>(result);
+    ASSERT_EQ(joins.size(), 1);
+    auto trait = joins[0]->getTraitSet().get<JoinImplementationTypeTrait>();
+    EXPECT_TRUE(trait->implementationType == JoinImplementation::NESTED_LOOP_JOIN);
+}
+
 
 }
 }

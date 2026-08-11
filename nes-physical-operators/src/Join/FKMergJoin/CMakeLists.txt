@@ -10,14 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(FKMergJoin)
-add_subdirectory(HashJoin)
-add_subdirectory(NestedLoopJoin)
+add_subdirectory(Oblivious)
 
 add_source_files(nes-physical-operators
-        JoinTriggerStrategy.cpp
-        StreamJoinBuildPhysicalOperator.cpp
-        StreamJoinOperatorHandler.cpp
-        StreamJoinProbePhysicalOperator.cpp
+        FKMergJoinSlice.cpp
+        FKMergJoinOperatorHandler.cpp
+        FKMergJoinBuildPhysicalOperator.cpp
+        FKMergJoinProbePhysicalOperator.cpp
 )
-
