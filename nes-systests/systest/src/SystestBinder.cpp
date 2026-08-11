@@ -253,8 +253,10 @@ public:
             getOperatorByType<SourceDescriptorLogicalOperator>(this->optimizedPlan->getGlobalPlan()),
             [&sourceNamesToFilepathAndCountForQuery](const auto& logicalSourceOperator)
             {
+                /// The key must match the one FileSource registers (ConfigParametersCSV::FILEPATH), and descriptor config
+                /// lookups are case-sensitive. Spelling it lowercase silently misses and zeroes out the benchmark throughput.
                 if (const auto path
-                    = logicalSourceOperator->getSourceDescriptor().template tryGetFromConfig<std::string>(std::string{"file_path"});
+                    = logicalSourceOperator->getSourceDescriptor().template tryGetFromConfig<std::string>(std::string{"FILE_PATH"});
                     path.has_value())
                 {
                     if (auto entry = sourceNamesToFilepathAndCountForQuery.extract(logicalSourceOperator->getSourceDescriptor());
