@@ -68,7 +68,8 @@ resolveLoweringRule(const LogicalOperator& logicalOperator, const LoweringRuleRe
             case JoinImplementation::FK_SORT_L3:
             case JoinImplementation::FK_SORT_L4:
             case JoinImplementation::NFK_JOIN_L2:
-            case JoinImplementation::NFK_JOIN_L3: {
+            case JoinImplementation::NFK_JOIN_L3:
+            case JoinImplementation::NLJ_L4: {
                 if (auto ruleOptional = LoweringRuleRegistry::instance().create(std::string("FKMergJoin"), registryArgument))
                 {
                     return std::move(ruleOptional.value());

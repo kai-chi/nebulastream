@@ -57,9 +57,13 @@ struct NfkSlotHeader
     static constexpr uint64_t FLAG_CONTRIBUTES = 1ULL << 4;
 
     [[nodiscard]] bool isEmpty() const { return (flags & FLAG_EMPTY) != 0; }
+
     [[nodiscard]] bool isRight() const { return (flags & FLAG_RIGHT) != 0; }
+
     [[nodiscard]] bool isKeyNull() const { return (flags & FLAG_KEY_NULL) != 0; }
+
     [[nodiscard]] bool isFresh() const { return (flags & FLAG_FRESH) != 0; }
+
     [[nodiscard]] bool contributes() const { return (flags & FLAG_CONTRIBUTES) != 0; }
 };
 

@@ -72,9 +72,9 @@ endif ()
 # so the .test files in nes-systests/inference/ are skipped at runtime.
 # The FKMergL* / FKSortL* / NfkJoinL* groups hold tests that only pass under the respective oblivious join strategy
 # (--optimizer join_strategy=FK_MERG_*/FK_SORT_*/NFK_JOIN_*); they run via the dedicated systest targets below.
-set(SYSTEST_EXCLUDE_GROUPS large FKMergL2 FKMergL3 FKMergL4 FKSortL2 FKSortL3 FKSortL4 NfkJoinL2 NfkJoinL3)
+set(SYSTEST_EXCLUDE_GROUPS large FKMergL2 FKMergL3 FKMergL4 FKSortL2 FKSortL3 FKSortL4 NfkJoinL2 NfkJoinL3 NljL4)
 set(SYSTEST_EXCLUDE_GROUPS_COMPILER
-        large CompilationIntensive FKMergL2 FKMergL3 FKMergL4 FKSortL2 FKSortL3 FKSortL4 NfkJoinL2 NfkJoinL3)
+        large CompilationIntensive FKMergL2 FKMergL3 FKMergL4 FKSortL2 FKSortL3 FKSortL4 NfkJoinL2 NfkJoinL3 NljL4)
 if (NOT ENABLE_IREE_TESTS)
     list(APPEND SYSTEST_EXCLUDE_GROUPS Inference)
     list(APPEND SYSTEST_EXCLUDE_GROUPS_COMPILER Inference)
@@ -161,6 +161,18 @@ if (NOT CODE_COVERAGE)
             set_tests_properties(systest_fk${fkFamily}_${fkLevel}_benchmark PROPERTIES LABELS "Systest" PROCESSORS 1)
         endforeach ()
     endforeach ()
+    # NLJ-L4: the padded oblivious nested-loop strawman (output = the windows' Cartesian product).
+    foreach (executionMode IN ITEMS INTERPRETER COMPILER)
+        string(TOLOWER ${executionMode} executionModeLower)
+        ExternalData_Add_Test(test-data
+                NAME systest_nljl4_${executionModeLower}
+                COMMAND systest -n 1 --show-query-performance --groups NljL4 --workingDir=${CMAKE_CURRENT_BINARY_DIR}/nljl4_${executionModeLower} --data ${EXPANDED_TEST_DATA_PATH} --optimizer join_strategy=NLJ_L4 -- --worker.query_engine.number_of_worker_threads=1 --worker.default_query_execution.execution_mode=${executionMode} --worker.total_memory_in_bytes=${SYSTEST_JOIN_TOTAL_MEMORY_BYTES} --worker.unpooled_memory_fraction=${SYSTEST_JOIN_UNPOOLED_FRACTION})
+        set_tests_properties(systest_nljl4_${executionModeLower} PROPERTIES LABELS "Systest" PROCESSORS 1)
+    endforeach ()
+    ExternalData_Add_Test(test-data
+            NAME systest_nljl4_benchmark
+            COMMAND systest -b --show-query-performance --groups NljL4 --workingDir=${CMAKE_CURRENT_BINARY_DIR}/nljl4_benchmark --data ${EXPANDED_TEST_DATA_PATH} --optimizer join_strategy=NLJ_L4 -- --worker.query_engine.number_of_worker_threads=1 --worker.default_query_execution.execution_mode=COMPILER --worker.total_memory_in_bytes=${SYSTEST_JOIN_TOTAL_MEMORY_BYTES} --worker.unpooled_memory_fraction=${SYSTEST_JOIN_UNPOOLED_FRACTION})
+    set_tests_properties(systest_nljl4_benchmark PROPERTIES LABELS "Systest" PROCESSORS 1)
     # NFK-JOIN (generic Krastnikov-based oblivious join): levels L2/L3 only, no L4 (its worst case is the Cartesian product).
     foreach (fkLevel IN ITEMS l2 l3)
         string(TOUPPER ${fkLevel} fkLevelUpper)

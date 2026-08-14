@@ -59,9 +59,9 @@
 #include <Util/Logger/Logger.hpp>
 #include <Util/SchemaFactory.hpp>
 #include <Watermark/TimeFunction.hpp>
-#include <magic_enum/magic_enum.hpp>
 #include <WindowTypes/Measures/TimeCharacteristic.hpp>
 #include <WindowTypes/Types/TimeBasedWindowType.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <ErrorHandling.hpp>
 #include <LoweringRuleRegistry.hpp>
 #include <PhysicalOperator.hpp>
@@ -208,6 +208,8 @@ LoweringRuleResultSubgraph LowerToPhysicalFKMergJoin::apply(LogicalOperator logi
                 return FKMerg::FKMergVariant::NFK_L2;
             case JoinImplementation::NFK_JOIN_L3:
                 return FKMerg::FKMergVariant::NFK_L3;
+            case JoinImplementation::NLJ_L4:
+                return FKMerg::FKMergVariant::NLJ_L4;
             default:
                 return FKMerg::FKMergVariant::MERG_L4;
         }

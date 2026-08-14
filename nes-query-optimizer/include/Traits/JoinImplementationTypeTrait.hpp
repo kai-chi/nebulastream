@@ -37,6 +37,7 @@ enum class JoinImplementation : uint8_t
     FK_SORT_L4,
     NFK_JOIN_L2,
     NFK_JOIN_L3,
+    NLJ_L4,
     CHOICELESS
 };
 

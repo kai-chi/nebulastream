@@ -115,6 +115,7 @@ public:
     [[nodiscard]] const int8_t* mergeAndScan();
 
     [[nodiscard]] uint64_t getNumberOfTuplesLeft() const { return sides[0].sorted.sizeSlots + stagedCount(0); }
+
     [[nodiscard]] uint64_t getNumberOfTuplesRight() const { return sides[1].sorted.sizeSlots + stagedCount(1); }
 
 private:

@@ -362,7 +362,8 @@ void obliviousDistribute(NfkSide& side, const uint64_t slotSize, const uint64_t 
             const auto header = readNfkHeader(side.slots + (i * static_cast<int64_t>(slotSize)));
             const int64_t dest = header.isEmpty() ? -1 : header.index;
             const bool cond = dest >= i + j;
-            oMemSwap(side.slots + (i * static_cast<int64_t>(slotSize)), side.slots + ((i + j) * static_cast<int64_t>(slotSize)), slotSize, cond);
+            oMemSwap(
+                side.slots + (i * static_cast<int64_t>(slotSize)), side.slots + ((i + j) * static_cast<int64_t>(slotSize)), slotSize, cond);
         }
     }
     side.size = targetSize;
@@ -618,9 +619,7 @@ uint64_t nfkPerTupleReplay(
         const SortedSide leftView{.slots = leftLog.slots, .sizeSlots = leftIndex, .capacitySlots = leftIndex};
         const SortedSide rightView{.slots = rightLog.slots, .sizeSlots = rightIndex, .capacitySlots = rightIndex};
         const NfkFreshSelector fresh{
-            .allFresh = false,
-            .freshSideIsRight = processRight,
-            .freshIndex = (processRight ? rightIndex : leftIndex) - 1};
+            .allFresh = false, .freshSideIsRight = processRight, .freshIndex = (processRight ? rightIndex : leftIndex) - 1};
 
         nextScratch = 0;
         const uint64_t emitted = nfkJoin(

@@ -167,6 +167,29 @@ const int8_t* FKMergJoinSlice::mergeAndScan()
     auto& pkState = sides[0].isFkSide ? sides[1] : sides[0];
     auto& fkState = sides[0].isFkSide ? sides[0] : sides[1];
 
+    if (variant == FKMerg::FKMergVariant::NLJ_L4)
+    {
+        /// NLJ-L4: the padded oblivious nested loop — output is exactly the
+        /// windows' Cartesian product (public given the window cardinalities).
+        auto& leftState = sides[0];
+        auto& rightState = sides[1];
+        const uint64_t outSlot = FKMerg::outputSlotSize(pkState.layout, fkState.layout);
+        const uint64_t totalSlots = leftState.sorted.sizeSlots * rightState.sorted.sizeSlots;
+        const uint64_t outputBytes = sizeof(uint64_t) + (std::max<uint64_t>(totalSlots, 1) * outSlot);
+        auto output = bufferProvider->getUnpooledBuffer(outputBytes);
+        if (not output.has_value())
+        {
+            throw BufferAllocationFailure("No unpooled TupleBuffer of {}B available for the NLJ-L4 padded output", outputBytes);
+        }
+        auto* outArea = output->getAvailableMemoryArea<uint8_t>().data();
+        FKMerg::nljL4Join(leftState.sorted, leftState.layout, rightState.sorted, rightState.layout, outArea + sizeof(uint64_t));
+        std::memcpy(outArea, &totalSlots, sizeof(totalSlots));
+
+        outputBuffer = output.value();
+        probed = true;
+        return outputBuffer.getAvailableMemoryArea<int8_t>().data();
+    }
+
     if (FKMerg::isNfkVariant(variant))
     {
         /// NFK-JOIN-L2/L3: the Krastnikov-based generic join over left/right
@@ -188,8 +211,8 @@ const int8_t* FKMergJoinSlice::mergeAndScan()
         };
 
         const FKMerg::NfkFreshSelector allFresh{};
-        const uint64_t totalMatches = FKMerg::nfkJoinSize(
-            leftState.sorted, leftState.layout, rightState.sorted, rightState.layout, allFresh, scratchAllocate);
+        const uint64_t totalMatches
+            = FKMerg::nfkJoinSize(leftState.sorted, leftState.layout, rightState.sorted, rightState.layout, allFresh, scratchAllocate);
 
         const uint64_t outSlot = FKMerg::outputSlotSize(pkState.layout, fkState.layout);
         const uint64_t capacitySlots = std::max<uint64_t>(totalMatches, 1);
@@ -313,7 +336,10 @@ const int8_t* FKMergJoinSlice::mergeAndScan()
         /// results to the front and emit only those.
         emittedSlots = FKMerg::trimDummies(outArea + sizeof(uint64_t), numMerged, outSlot);
         INVARIANT(
-            emittedSlots == scanResult.realMatches, "L3 trim kept {} slots but the scan found {} matches", emittedSlots, scanResult.realMatches);
+            emittedSlots == scanResult.realMatches,
+            "L3 trim kept {} slots but the scan found {} matches",
+            emittedSlots,
+            scanResult.realMatches);
     }
     std::memcpy(outArea, &emittedSlots, sizeof(emittedSlots));
 

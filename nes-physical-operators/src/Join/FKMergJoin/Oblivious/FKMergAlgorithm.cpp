@@ -166,8 +166,8 @@ uint64_t crossMergePaddedSlots(const uint64_t numPkSlots, const uint64_t numFkSl
     return nextPowerOfTwo(2 * std::max(numPkSlots, numFkSlots));
 }
 
-uint64_t crossMerge(
-    const SortedSide& pkSide, const SideLayout& pkLayout, const SortedSide& fkSide, const SideLayout& fkLayout, uint8_t* scratch)
+uint64_t
+crossMerge(const SortedSide& pkSide, const SideLayout& pkLayout, const SortedSide& fkSide, const SideLayout& fkLayout, uint8_t* scratch)
 {
     const uint64_t slotSize = mergedSlotSize(pkLayout, fkLayout);
     const uint64_t pkSlotSize = pkLayout.slotSize();
@@ -467,6 +467,60 @@ ScanResult perTupleReplay(
     return total;
 }
 
+uint64_t nljL4Join(
+    const SortedSide& leftLog, const SideLayout& leftLayout, const SortedSide& rightLog, const SideLayout& rightLayout, uint8_t* outSlots)
+{
+    const uint64_t numLeft = leftLog.sizeSlots;
+    const uint64_t numRight = rightLog.sizeSlots;
+    const uint64_t leftSlotSize = leftLayout.slotSize();
+    const uint64_t rightSlotSize = rightLayout.slotSize();
+    const uint64_t outSlot = sizeof(uint64_t) + rightLayout.rowSize + leftLayout.rowSize;
+
+    /// Precompute the normalized keys once per side (one linear,
+    /// data-independent pass each); the reference compares the probe key at
+    /// every window position the same way.
+    std::vector<uint64_t> leftKeys(numLeft);
+    std::vector<uint8_t> leftNull(numLeft);
+    std::vector<uint64_t> rightKeys(numRight);
+    std::vector<uint8_t> rightNull(numRight);
+    for (uint64_t i = 0; i < numLeft; ++i)
+    {
+        bool isNull = false;
+        leftKeys[i] = normalizeKey(leftLog.slots + (i * leftSlotSize) + sizeof(SlotHeader), leftLayout, isNull);
+        leftNull[i] = static_cast<uint8_t>(isNull);
+    }
+    for (uint64_t j = 0; j < numRight; ++j)
+    {
+        bool isNull = false;
+        rightKeys[j] = normalizeKey(rightLog.slots + (j * rightSlotSize) + sizeof(SlotHeader), rightLayout, isNull);
+        rightNull[j] = static_cast<uint8_t>(isNull);
+    }
+
+    const std::vector<uint8_t> zeroRow(std::max(leftLayout.rowSize, rightLayout.rowSize), 0);
+    uint64_t matches = 0;
+
+    /// The padded nested loop: every pair produces exactly one output slot
+    /// with identical work — a real joined pair on a key match, an all-zero
+    /// dummy otherwise, selected branch-free.
+    for (uint64_t i = 0; i < numLeft; ++i)
+    {
+        const uint8_t* leftRow = leftLog.slots + (i * leftSlotSize) + sizeof(SlotHeader);
+        uint8_t* out = outSlots + (i * numRight * outSlot);
+        for (uint64_t j = 0; j < numRight; ++j)
+        {
+            const uint8_t* rightRow = rightLog.slots + (j * rightSlotSize) + sizeof(SlotHeader);
+            const bool emitReal = (leftKeys[i] == rightKeys[j]) & (leftNull[i] == 0) & (rightNull[j] == 0);
+            matches += static_cast<uint64_t>(emitReal);
+            uint8_t* slot = out + (j * outSlot);
+            const uint64_t flags = static_cast<uint64_t>(!emitReal);
+            std::memcpy(slot, &flags, sizeof(flags));
+            oSelectBytes(slot + sizeof(uint64_t), rightRow, zeroRow.data(), rightLayout.rowSize, emitReal);
+            oSelectBytes(slot + sizeof(uint64_t) + rightLayout.rowSize, leftRow, zeroRow.data(), leftLayout.rowSize, emitReal);
+        }
+    }
+    return matches;
+}
+
 uint64_t trimDummies(uint8_t* outSlots, const uint64_t numSlots, const uint64_t outSlotSize)
 {
     const uint64_t padded = nextPowerOfTwo(numSlots);
@@ -499,8 +553,8 @@ uint64_t trimDummies(uint8_t* outSlots, const uint64_t numSlots, const uint64_t 
     return realSlots;
 }
 
-ScanResult obliviousScan(
-    const uint8_t* merged, const uint64_t numMergedSlots, const SideLayout& pkLayout, const SideLayout& fkLayout, uint8_t* out)
+ScanResult
+obliviousScan(const uint8_t* merged, const uint64_t numMergedSlots, const SideLayout& pkLayout, const SideLayout& fkLayout, uint8_t* out)
 {
     const uint64_t slotSize = mergedSlotSize(pkLayout, fkLayout);
     const uint64_t outSlot = outputSlotSize(pkLayout, fkLayout);
@@ -536,16 +590,15 @@ ScanResult obliviousScan(
 
         /// Emit a real joined pair iff the slot is a real FK tuple whose key
         /// equals the carried real PK's key (OpaqueJoin.cpp:28).
-        const bool emitReal = cur.isFkSide() & !cur.isDummy() & !cur.isKeyNull() & carriedHeader.isRealPk()
-            & (cur.sortKey == carriedHeader.sortKey);
+        const bool emitReal
+            = cur.isFkSide() & !cur.isDummy() & !cur.isKeyNull() & carriedHeader.isRealPk() & (cur.sortKey == carriedHeader.sortKey);
         result.realMatches += static_cast<uint64_t>(emitReal);
 
         uint8_t* outPtr = out + (i * outSlot);
         const uint64_t flags = static_cast<uint64_t>(!emitReal);
         std::memcpy(outPtr, &flags, sizeof(flags));
         oSelectBytes(outPtr + sizeof(uint64_t), carried.data() + sizeof(SlotHeader), zeroRow.data(), pkLayout.rowSize, emitReal);
-        oSelectBytes(
-            outPtr + sizeof(uint64_t) + pkLayout.rowSize, slot + sizeof(SlotHeader), zeroRow.data(), fkLayout.rowSize, emitReal);
+        oSelectBytes(outPtr + sizeof(uint64_t) + pkLayout.rowSize, slot + sizeof(SlotHeader), zeroRow.data(), fkLayout.rowSize, emitReal);
     }
 
     result.duplicatePkDetected = duplicatePk;

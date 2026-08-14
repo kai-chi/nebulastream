@@ -79,6 +79,7 @@ std::vector<TestRow> sideRows(const SortedSide& side, const SideLayout& layout)
 struct TestArena
 {
     std::vector<std::vector<uint8_t>> chunks;
+
     AllocateFn allocator()
     {
         return [this](const uint64_t bytes) -> uint8_t*
@@ -145,10 +146,11 @@ TEST_F(FKMergObliviousPrimitivesTest, bitonicSortMatchesStdSort)
                     expected.end(),
                     [&](const auto& lhs, const auto& rhs)
                     {
-                        const bool less = slotLess(
-                            reinterpret_cast<const uint8_t*>(&lhs.first), reinterpret_cast<const uint8_t*>(&rhs.first));
-                        return descending ? slotLess(reinterpret_cast<const uint8_t*>(&rhs.first), reinterpret_cast<const uint8_t*>(&lhs.first))
-                                          : less;
+                        const bool less
+                            = slotLess(reinterpret_cast<const uint8_t*>(&lhs.first), reinterpret_cast<const uint8_t*>(&rhs.first));
+                        return descending
+                            ? slotLess(reinterpret_cast<const uint8_t*>(&rhs.first), reinterpret_cast<const uint8_t*>(&lhs.first))
+                            : less;
                     });
 
                 bitonicSort(arr.data(), slotSize, 0, count, descending);
@@ -942,6 +944,69 @@ TEST_F(FKMergObliviousPrimitivesTest, nfkPerTupleReplayMatchesBruteForce)
             = nfkPerTupleReplay(leftLog, layout, rightLog, layout, out.data(), std::max<uint64_t>(total, 1), arena.allocator());
         ASSERT_EQ(emitted, expected.size()) << "round=" << round;
         EXPECT_EQ(decodeNfkOutput(out.data(), emitted), expected) << "round=" << round;
+    }
+}
+
+/// nljL4Join must emit exactly nL*nR slots whose real subset equals the
+/// brute-force generic join (duplicates allowed), dummies all-zero.
+TEST_F(FKMergObliviousPrimitivesTest, nljL4JoinMatchesBruteForcePadded)
+{
+    std::mt19937_64 rng(4711);
+    const auto layout = testLayout();
+
+    for (int round = 0; round < 5; ++round)
+    {
+        TestArena arena;
+        SortedSide leftLog;
+        SortedSide rightLog;
+        const uint64_t numLeft = round == 4 ? 0 : 1 + (rng() % 30);
+        const uint64_t numRight = 1 + (rng() % 30);
+        std::vector<TestRow> leftRows(numLeft);
+        std::vector<TestRow> rightRows(numRight);
+        for (auto& row : leftRows)
+        {
+            row = TestRow{.key = static_cast<int32_t>(rng() % 10), .payload = rng() % 100000};
+        }
+        for (auto& row : rightRows)
+        {
+            row = TestRow{.key = static_cast<int32_t>(rng() % 10), .payload = rng() % 100000};
+        }
+        if (numLeft > 0)
+        {
+            const auto bytes = rowBytes(leftRows);
+            appendToArrivalLog(leftLog, layout, false, bytes.data(), numLeft, arena.allocator());
+        }
+        const auto rightBytes = rowBytes(rightRows);
+        appendToArrivalLog(rightLog, layout, true, rightBytes.data(), numRight, arena.allocator());
+
+        const auto expected = bruteForceNfk(leftRows, rightRows);
+        const uint64_t outSlot = sizeof(uint64_t) + (2 * sizeof(TestRow));
+        std::vector<uint8_t> out(std::max<uint64_t>(numLeft * numRight, 1) * outSlot);
+        const uint64_t matches = nljL4Join(leftLog, layout, rightLog, layout, out.data());
+        ASSERT_EQ(matches, expected.size()) << "round=" << round;
+
+        std::multiset<std::pair<uint64_t, uint64_t>> actual;
+        for (uint64_t i = 0; i < numLeft * numRight; ++i)
+        {
+            const uint8_t* slot = out.data() + (i * outSlot);
+            uint64_t flags = 0;
+            std::memcpy(&flags, slot, sizeof(flags));
+            TestRow rightRow;
+            TestRow leftRow;
+            std::memcpy(&rightRow, slot + sizeof(uint64_t), sizeof(TestRow));
+            std::memcpy(&leftRow, slot + sizeof(uint64_t) + sizeof(TestRow), sizeof(TestRow));
+            if ((flags & 1ULL) == 0)
+            {
+                EXPECT_EQ(leftRow.key, rightRow.key);
+                actual.emplace(leftRow.payload, rightRow.payload);
+            }
+            else
+            {
+                EXPECT_EQ(leftRow.key, 0);
+                EXPECT_EQ(rightRow.key, 0);
+            }
+        }
+        EXPECT_EQ(actual, expected) << "round=" << round;
     }
 }
 

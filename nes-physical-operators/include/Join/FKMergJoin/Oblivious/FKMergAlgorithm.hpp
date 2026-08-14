@@ -51,7 +51,11 @@ enum class FKMergVariant : uint8_t
     /// see NfkJoin.hpp). No L4 variant exists: the non-FK worst case is the
     /// Cartesian product.
     NFK_L2,
-    NFK_L3
+    NFK_L3,
+    /// The paper's strawman baseline: an oblivious nested loop that emits one
+    /// slot (match or dummy) per scanned pair — output padded to the windows'
+    /// Cartesian product.
+    NLJ_L4
 };
 
 /// L2 variants replay the window tuple-by-tuple at trigger time.
@@ -151,7 +155,8 @@ uint64_t normalizeKey(const uint8_t* row, const SideLayout& layout, bool& isNull
 /// bitonic-sorts the power-of-two batch region descending, then runs the
 /// straight bitonic merge over the whole array. Dummies sort to the tail and
 /// are trimmed logically (sizeSlots grows by numBatchRows, no shrink).
-void oAppend(SortedSide& side, const SideLayout& layout, bool fkSide, const uint8_t* batchRows, uint64_t numBatchRows, const AllocateFn& allocate);
+void oAppend(
+    SortedSide& side, const SideLayout& layout, bool fkSide, const uint8_t* batchRows, uint64_t numBatchRows, const AllocateFn& allocate);
 
 /// Slot size of the tagged cross-stream merge arrays: SlotHeader plus a
 /// payload union area large enough for either side's row.
@@ -166,7 +171,8 @@ uint64_t crossMergePaddedSlots(uint64_t numPkSlots, uint64_t numFkSlots);
 /// right-aligned tagged tableId=1 into `scratch`, then runs the straight
 /// bitonic merge. `scratch` must hold crossMergePaddedSlots(...) slots of
 /// mergedSlotSize(...) bytes. Returns the logical slot count (nPk + nFk).
-uint64_t crossMerge(const SortedSide& pkSide, const SideLayout& pkLayout, const SortedSide& fkSide, const SideLayout& fkLayout, uint8_t* scratch);
+uint64_t
+crossMerge(const SortedSide& pkSide, const SideLayout& pkLayout, const SortedSide& fkSide, const SideLayout& fkLayout, uint8_t* scratch);
 
 /// Byte size of one output slot: a uint64 flags word (bit0 = dummy) followed
 /// by the PK row and the FK row.
@@ -226,6 +232,21 @@ ScanResult perTupleReplay(
     uint64_t outCapacitySlots,
     const AllocateFn& allocate);
 
+/// NLJ-L4 (reference Enclave/NestedLoopJoin: per arriving tuple, fullScan
+/// walks the entire opposite window emitting one slot per position, "real
+/// match or dummy, same cost every time") collapsed to window granularity:
+/// one oblivious pass over all leftLog x rightLog pairs, emitting exactly
+/// numLeft*numRight output slots — a real joined pair where the keys match,
+/// an all-zero dummy otherwise, via branch-free selects either way. Output
+/// volume is the windows' Cartesian product (the L4 worst case for a generic
+/// join). Duplicates on both sides are supported; NULL keys never match.
+/// `outSlots` must hold leftLog.sizeSlots * rightLog.sizeSlots slots of
+/// outputSlotSize(rightLayout-as-pk, leftLayout-as-fk) bytes, written in the
+/// probe's [flags][rightRow][leftRow] region convention. Returns the real
+/// match count.
+uint64_t nljL4Join(
+    const SortedSide& leftLog, const SideLayout& leftLayout, const SortedSide& rightLog, const SideLayout& rightLayout, uint8_t* outSlots);
+
 /// The L3 result trim (paper Algorithm 4, line 10 — OCompaction): obliviously
 /// moves the real output slots to the front (stable) so that only they are
 /// emitted, leaking the per-window join cardinality but nothing else. Pads
@@ -242,11 +263,7 @@ uint64_t trimDummies(uint8_t* outSlots, uint64_t numSlots, uint64_t outSlotSize)
 /// bytes). Output volume therefore equals the merged slot count, independent
 /// of the data. Duplicate real PK keys are detected branch-free during the
 /// walk and reported in the result.
-ScanResult obliviousScan(
-    const uint8_t* merged,
-    uint64_t numMergedSlots,
-    const SideLayout& pkLayout,
-    const SideLayout& fkLayout,
-    uint8_t* out);
+ScanResult
+obliviousScan(const uint8_t* merged, uint64_t numMergedSlots, const SideLayout& pkLayout, const SideLayout& fkLayout, uint8_t* out);
 
 }

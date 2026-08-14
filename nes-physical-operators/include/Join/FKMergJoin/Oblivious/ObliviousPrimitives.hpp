@@ -54,8 +54,11 @@ struct SlotHeader
     static constexpr uint64_t FLAG_FK = 1ULL << 2;
 
     [[nodiscard]] bool isDummy() const { return (flags & FLAG_DUMMY) != 0; }
+
     [[nodiscard]] bool isKeyNull() const { return (flags & FLAG_KEY_NULL) != 0; }
+
     [[nodiscard]] bool isFkSide() const { return (flags & FLAG_FK) != 0; }
+
     /// True only for a real (non-dummy) PK-side slot.
     [[nodiscard]] bool isRealPk() const { return (flags & (FLAG_DUMMY | FLAG_KEY_NULL | FLAG_FK)) == 0; }
 };
@@ -217,7 +220,12 @@ inline void bitonicMerge(
 /// callers pad with dummy slots (the reference logs and no-ops on violations;
 /// we assert via the caller's padding logic instead).
 inline void bitonicSort(
-    uint8_t* arr, const size_t slotSize, const size_t start, const size_t count, const bool descending, const SlotComparator less = slotLess)
+    uint8_t* arr,
+    const size_t slotSize,
+    const size_t start,
+    const size_t count,
+    const bool descending,
+    const SlotComparator less = slotLess)
 {
     if (count <= 1)
     {
@@ -271,8 +279,8 @@ inline void compactionSwapRange(
 /// moved yet (counts happen before the recursive calls, base-case pairs read
 /// their marks before swapping). `offset` rotates the compaction target and is
 /// 0 for top-level calls.
-inline void obliviousCompactPow2(
-    uint8_t* arr, const size_t slotSize, const uint8_t* marks, const size_t start, const size_t count, const size_t offset)
+inline void
+obliviousCompactPow2(uint8_t* arr, const size_t slotSize, const uint8_t* marks, const size_t start, const size_t count, const size_t offset)
 {
     if (count < 2)
     {

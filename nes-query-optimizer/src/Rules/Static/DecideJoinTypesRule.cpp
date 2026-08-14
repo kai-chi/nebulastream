@@ -127,6 +127,8 @@ std::optional<JoinImplementation> fkJoinImplementationFor(const StreamJoinStrate
             return JoinImplementation::NFK_JOIN_L2;
         case StreamJoinStrategy::NFK_JOIN_L3:
             return JoinImplementation::NFK_JOIN_L3;
+        case StreamJoinStrategy::NLJ_L4:
+            return JoinImplementation::NLJ_L4;
         default:
             return std::nullopt;
     }
